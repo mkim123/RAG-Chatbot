@@ -45,17 +45,26 @@ class RAGChatbot:
     - LangGraph workflow
     - Chat interface
     """
-    
-    def __init__(self, data_file: str = "singapore_hdb_data.json", env_file: str = ".env"):
+    # Data-path parameter required
+    def __init__(self, data_file, env_file: str = ".env"):
         """
         Initialize the RAG chatbot.
         
         Args:
-            data_file: Path to the JSON file containing housing data
+            data_file: Path(s) to JSON file(s) containing housing data. 
+                      Can be a single string or list of strings for multiple files.
+                      Example: "data.json" or ["data1.json", "data2.json"]
             env_file: Path to the .env file containing API keys
         """
-        self.data_file = data_file
-        self.env_file = env_file
+        # Convert single file to list for uniform processing
+        if isinstance(data_file, str):
+            self.data_files = [data_file]
+        elif isinstance(data_file, list):
+            self.data_files = data_file
+        else:
+            raise ValueError("data_file must be a string or list of strings")
+        
+        self.env_file = env_file 
         
         # Load environment variables
         self._load_environment()
@@ -106,41 +115,53 @@ class RAGChatbot:
         print("✅ Vector store created")
     
     def _load_data(self):
-        """Load and process the housing data."""
-        try:
-            # Load JSON data
-            with open(self.data_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            
-            # Convert to documents
-            documents = []
-            for entry in data:
-                area = entry["area"]
-                has_hdb = entry["has_hdb"]
-                hdb_price_range = entry["hdb_price_range"]
-                pros = entry["pros"]
-                cons = entry["cons"]
+        """Load and process the housing data from multiple files."""
+        all_documents = []
+        total_entries = 0
+        
+        for data_file in self.data_files:
+            try:
+                print(f"📁 Loading data from: {data_file}")
                 
-                doc = Document(
-                    page_content=f"Area: {area}\nHDB Available: {has_hdb}\nHDB Price range: {hdb_price_range}\nPros: {pros}\nCons: {cons}",
-                    metadata={"Area": area}
-                )
-                documents.append(doc)
-            
-            # Split documents
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=50)
-            json_splits = text_splitter.split_documents(documents)
-            
-            # Add to vector store
-            self.vector_store.add_documents(documents=json_splits)
-            
-            print(f"✅ Loaded {len(json_splits)} document chunks")
-            
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Data file not found: {self.data_file}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to load data: {e}")
+                # Load JSON data
+                with open(data_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                # Convert to documents
+                file_documents = []
+                for entry in data:
+                    area = entry["area"]
+                    has_hdb = entry["has_hdb"]
+                    hdb_price_range = entry["hdb_price_range"]
+                    pros = entry["pros"]
+                    cons = entry["cons"]
+                    
+                    doc = Document(
+                        page_content=f"Area: {area}\nHDB Available: {has_hdb}\nHDB Price range: {hdb_price_range}\nPros: {pros}\nCons: {cons}",
+                        metadata={"Area": area, "Source": data_file}
+                    )
+                    file_documents.append(doc)
+                
+                all_documents.extend(file_documents)
+                total_entries += len(file_documents)
+                print(f"  ✅ Loaded {len(file_documents)} entries from {data_file}")
+                
+            except FileNotFoundError:
+                raise FileNotFoundError(f"Data file not found: {data_file}")
+            except Exception as e:
+                raise RuntimeError(f"Failed to load data from {data_file}: {e}")
+        
+        # Split all documents
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=50)
+        json_splits = text_splitter.split_documents(all_documents)
+        
+        # Add to vector store
+        self.vector_store.add_documents(documents=json_splits)
+        
+        print(f"✅ Successfully loaded {total_entries} total entries from {len(self.data_files)} file(s)")
+        print(f"✅ Created {len(json_splits)} document chunks for vector store")
     
+    # RAG pipeline =========================================
     def _build_graph(self):
         """Build the LangGraph workflow."""
         
@@ -215,6 +236,7 @@ class RAGChatbot:
         
         self.graph = graph_builder.compile()
         print("✅ Graph workflow built successfully")
+# ====================================================================
     
     def chat(self, message: str, conversation_state: Optional[Dict[str, Any]] = None) -> str:
         """
